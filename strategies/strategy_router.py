@@ -152,7 +152,11 @@ def run_backtest_adapter(strategy_id: str, symbol: str, timeframe: str, lookback
     Returns standard benchmark metrics if implemented.
     """
     strategy = get_strategy(strategy_id)
-    if not strategy or not strategy.get("testability", {}).get("can_backtest"):
+    if not strategy:
+        return {"error": f"Strategy {strategy_id} not found in registry."}
+        
+    can_backtest = strategy.get("testability", {}).get("can_backtest") or strategy.get("readiness", {}).get("backtesting")
+    if not can_backtest:
         return {"error": "No backtest adapter available."}
         
     # Placeholder for actual backtest adapter execution

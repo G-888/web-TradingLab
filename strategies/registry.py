@@ -1111,8 +1111,14 @@ def get_testable_strategies(test_type: str) -> list[dict]:
 
 def get_backtestable_strategies() -> list[dict]:
     """Return strategies that can be backtested."""
-    return [s for s in STRATEGY_REGISTRY.values() if s.get("testability", {}).get("can_backtest", False)]
+    return [
+        s for s in STRATEGY_REGISTRY.values() 
+        if s.get("testability", {}).get("can_backtest", False) or s.get("readiness", {}).get("backtesting", False)
+    ]
 
 def get_forward_testable_strategies() -> list[dict]:
     """Return strategies that can be forward tested."""
-    return [s for s in STRATEGY_REGISTRY.values() if s.get("testability", {}).get("can_forward_test", False)]
+    return [
+        s for s in STRATEGY_REGISTRY.values() 
+        if s.get("testability", {}).get("can_forward_test", False) or s.get("readiness", {}).get("forward_testing", False)
+    ]

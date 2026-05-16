@@ -20,7 +20,7 @@ export default function BacktestsPage() {
 
   // Form State
   const [symbol, setSymbol] = useState('XAUUSD');
-  const [strategy, setStrategy] = useState('SMC');
+  const [strategy, setStrategy] = useState('fibonacci_retracement');
   const [timeframe, setTimeframe] = useState('H1');
   const [lookback, setLookback] = useState('90d');
   const [capital, setCapital] = useState('10000');
@@ -189,7 +189,7 @@ export default function BacktestsPage() {
                       {strategies.length > 0 ? (
                         strategies.map(s => <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>)
                       ) : (
-                        <SelectItem value="SMC">SMC</SelectItem>
+                        <SelectItem value="fibonacci_retracement">Fibonacci Retracement</SelectItem>
                       )}
                     </SelectContent>
                   </Select>

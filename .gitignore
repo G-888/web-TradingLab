@@ -65,3 +65,12 @@ pip-delete-this-directory.txt
 # Replit
 .cache/
 .local/
+
+# Database & Runtime
+*.db
+*.sqlite
+*.sqlite3
+data/
+web_dashboard/.env.local
+.next/
+

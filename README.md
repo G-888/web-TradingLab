@@ -6,6 +6,8 @@ A professional-grade Telegram bot for quantitative XAUUSD (Gold) research, signa
 
 ## Overview
 
+**[Dashboard Guide & Architecture](docs/DASHBOARD_GUIDE.md)**: A comprehensive manual for running and using the Next.js dashboard, including Strategy Lab details and safety boundaries.
+
 This system combines real-time market data, multi-strategy signal generation, and a self-evaluating analytics platform into a single Telegram-based terminal. All metrics are Python-computed from live market data. AI (Groq) is used exclusively to explain outputs, not to generate them.
 
 **Core design principles:**
@@ -78,6 +80,8 @@ xauusd-gold-ai/
 │   └── regime.py              # Market regime detection (trending/ranging/volatile)
 │
 ├── strategies/
+│   ├── registry.py            # Centralized list of 21 strategies (planned & implemented)
+│   ├── strategy_router.py     # Safe execution routing mapping to active modules
 │   ├── fibonacci.py           # Swing detection, Fibonacci levels, confluence scoring
 │   ├── smc.py                 # BOS, CHoCH, order blocks, FVGs, liquidity
 │   ├── session.py             # Session analysis (London/NY/Asia ranges and bias)
@@ -309,6 +313,54 @@ docker compose restart
 
 ---
 
+### Local Web Dashboard Development
+
+The project includes a standalone web dashboard (FastAPI backend + Next.js frontend) for monitoring the bot's data locally without executing live trades or interfering with the bot's Telegram polling.
+
+1. Install backend dependencies:
+```bash
+pip install -r requirements.txt
+```
+
+2. Create local environment:
+```bash
+cp .env.example .env
+```
+
+3. Set environment variables in `.env`:
+```
+DB_PATH=data/local_dashboard_gold_bot.db
+DASHBOARD_API_KEY=local-dev-key
+```
+
+4. Run dashboard API:
+```bash
+uvicorn dashboard_api.app:app --host 127.0.0.1 --port 8000
+```
+
+5. Run web dashboard:
+```bash
+cd web_dashboard
+npm install
+cp .env.local.example .env.local
+npm run dev
+```
+
+6. Open the dashboard:
+http://localhost:3000
+
+Also, the existing Telegram bot can be started separately:
+```bash
+python main.py
+```
+
+**Note**: 
+- Telegram bot and dashboard API run separately.
+- The dashboard is **read-only**.
+- The dashboard does not execute trades or start Telegram polling.
+
+---
+
 ## Bot Operation Guide
 
 ### 4-Section Navigation
@@ -432,6 +484,53 @@ The decay engine compares rolling 7-day, 30-day, and 90-day performance windows.
 
 ---
 
+## Strategy Lab & Benchmarking
+
+The **Strategy Lab** is a robust environment designed to systematically backtest, forward test, compare, and rank all available strategies. It strictly acts as a sandbox testability layer without executing live trades or integrating with broker APIs.
+
+### Key Features
+1. **Batch Backtesting**: Simultaneously evaluate every implemented strategy on historical data.
+2. **Paper Forward Testing**: Initialize virtual observation sessions to track live strategy performance on real market data.
+3. **SMC Component Integration**: High-fidelity detection of Smart Money Concepts (BOS, CHoCH, FVG, Liquidity Sweeps).
+4. **Transparent Scoring Formula**: Strategies are ranked according to a rigid, transparent score:
+   `score = (win_rate * 100) + (profit_factor * 10) - (abs(max_drawdown) * 2) + (expectancy * 50) + (min(total_trades, 100) * 0.1)`
+
+### Testability Constraints
+- **Planned Strategies**: Automatically excluded from the Strategy Lab. They must be fully implemented to participate in batch testing.
+- **Safety First**: The lab strictly enforces `BACKTEST ONLY` and `PAPER TEST ONLY` protocols. Backtest performance does not guarantee future results.
+
+For a detailed technical overview, see the **[Dashboard Guide & Architecture](docs/DASHBOARD_GUIDE.md)**.
+
+---
+
+## Strategy Detail & Conversion Workflow
+
+The **Strategy Registry** (`strategies/registry.py`) holds metadata for all active and planned strategies. Our Next.js dashboard uses this to provide a comprehensive roadmap and conversion workflow.
+
+### Detail Metadata Meaning
+- **how_it_works**: Core algorithm logic summary.
+- **best/weak_conditions**: Environments where the strategy thrives or fails.
+- **required_indicators & data**: Dependencies needed to run it.
+- **readiness**: Boolean flags for `analysis`, `backtesting`, `forward_testing`, and `ea_ready`.
+- **implementation_steps**: The roadmap checklist needed to build the strategy.
+
+### How to Implement a Planned Strategy
+
+To convert a strategy from `planned` to `implemented`:
+
+1. **Add logic**: Create or update the strategy's `.py` file under `strategies/` (e.g. `strategies/support_resistance.py`).
+2. **Standard Output**: Ensure your function returns a standard dictionary (e.g., `{"direction": "BULLISH", "confidence": 80, "reason": "..."}`).
+3. **Map Function**: Open `strategies/strategy_router.py` and map your function inside `run_strategy()`.
+4. **Update Registry**: In `strategies/registry.py`, change the status from `"planned"` to `"partial"` (if it's partially working) or `"implemented"`. Update `readiness["analysis"] = True`.
+5. **Backtest Adapter**: Once the logic is sound, add backtest hooks. Update `readiness["backtesting"] = True`.
+6. **Validation**: Complete the `validation_checklist` defined in the registry.
+7. **Test Dashboard**: Open the web dashboard and verify the "Analyze" button now works without producing fake results.
+
+> [!WARNING]
+> Do NOT mark a strategy as `implemented` unless the logic exists and returns real calculations. Fake results or hardcoded signals compromise the integrity of the institutional-grade framework.
+
+---
+
 ## Troubleshooting
 
 | Issue | Cause | Fix |
@@ -497,4 +596,165 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND.
 - [ ] Portfolio-level drawdown management
 - [ ] Webhook mode for production deployments
 - [ ] Strategy correlation matrix
-- [ ] Web dashboard (FastAPI + React)
+- [x] Web dashboard (FastAPI + React/Next.js)
+
+---
+
+## Production Deployment Guide
+
+To deploy the Telegram Bot and the Dashboard API/Frontend to a production server (Linux VPS recommended), follow this guide.
+
+### 1. Environment Configurations
+Do not commit your `.env` files.
+
+**Root `.env` (Telegram & API)**
+```
+TELEGRAM_BOT_TOKEN=your_live_token
+GROQ_API_KEY=your_live_key
+DB_PATH=data/gold_bot.db
+DASHBOARD_API_KEY=your_super_secret_long_key_here
+DASHBOARD_ALLOWED_ORIGINS=https://dashboard.mydomain.com
+```
+
+**Frontend `web_dashboard/.env.local`**
+```
+NEXT_PUBLIC_API_BASE_URL=https://dashboard.mydomain.com
+NEXT_PUBLIC_DASHBOARD_API_KEY=your_super_secret_long_key_here
+```
+> **Note:** The `NEXT_PUBLIC_DASHBOARD_API_KEY` is visible to the client browser. For maximum security in production, you should protect the dashboard via **Cloudflare Access**, **Nginx Basic Auth**, or a VPN, as the frontend strictly queries your database read-only.
+
+### 2. Linux Systemd Setup (Recommended)
+This approach keeps all processes running reliably in the background, restarting automatically on failure.
+
+#### A. Telegram Bot (`/etc/systemd/system/telegram-bot.service`)
+```ini
+[Unit]
+Description=AI Trading Telegram Bot
+After=network.target
+
+[Service]
+User=your_linux_user
+WorkingDirectory=/path/to/xauusd-gold-ai
+ExecStart=/path/to/xauusd-gold-ai/venv/bin/python main.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+```
+
+#### B. Dashboard API (`/etc/systemd/system/dashboard-api.service`)
+```ini
+[Unit]
+Description=Dashboard FastAPI Backend
+After=network.target
+
+[Service]
+User=your_linux_user
+WorkingDirectory=/path/to/xauusd-gold-ai
+ExecStart=/path/to/xauusd-gold-ai/venv/bin/python -m uvicorn dashboard_api.app:app --host 127.0.0.1 --port 8000
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+```
+
+#### C. Dashboard Frontend (`/etc/systemd/system/dashboard-frontend.service`)
+First, build the project:
+```bash
+cd web_dashboard
+npm install
+npm run build
+```
+
+Then create the service:
+```ini
+[Unit]
+Description=Next.js Dashboard Frontend
+After=network.target
+
+[Service]
+User=your_linux_user
+WorkingDirectory=/path/to/xauusd-gold-ai/web_dashboard
+Environment="PORT=3000"
+ExecStart=/usr/bin/npm run start
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+```
+
+**Enable and Start Services:**
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable telegram-bot dashboard-api dashboard-frontend
+sudo systemctl start telegram-bot dashboard-api dashboard-frontend
+```
+
+### 3. Windows Server Deployment
+If using Windows Server, you can use **NSSM** (Non-Sucking Service Manager) to wrap the scripts into Windows Services.
+
+1. Download NSSM and run `nssm install TelegramBot`.
+2. Set the Path to `python.exe` inside your `venv`.
+3. Set Arguments to `main.py` and set the Working Directory.
+4. Repeat for **Dashboard API** using arguments `-m uvicorn dashboard_api.app:app --host 127.0.0.1 --port 8000`.
+5. Repeat for **Dashboard Frontend** using `npm.cmd` as the executable and `run start` as the arguments in the `web_dashboard` directory (make sure to `npm run build` first).
+
+### 4. Nginx Reverse Proxy
+To securely expose the dashboard on the web via HTTPS, use an Nginx reverse proxy.
+Install Certbot (`sudo apt install certbot python3-certbot-nginx`) to provision SSL certificates.
+
+`/etc/nginx/sites-available/dashboard`
+```nginx
+server {
+    listen 80;
+    server_name dashboard.mydomain.com;
+
+    # Basic Auth Protection (Recommended)
+    # auth_basic "Restricted Dashboard";
+    # auth_basic_user_file /etc/nginx/.htpasswd;
+
+    # Route frontend Next.js traffic
+    location / {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # Route FastAPI API requests
+    location /api/ {
+        proxy_pass http://127.0.0.1:8000/api/;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # Public Health Check
+    location /health {
+        proxy_pass http://127.0.0.1:8000/health;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+    }
+}
+```
+
+### 5. Production Security Checklist
+- [ ] **HTTPS Enforcement**: Do not run the dashboard on public HTTP.
+- [ ] **Internal Ports**: Ports `8000` and `3000` must be blocked from the public internet using UFW/Windows Firewall. Only port `80` and `443` should be public.
+- [ ] **Read-Only**: The dashboard cannot execute trades. Any API keys input into the frontend are purely to query SQLite.
+- [ ] **Strong Keys**: Set `DASHBOARD_API_KEY` to a 64+ character random string.
+- [ ] **Gitignore secrets**: Validate that `.env`, `.env.production`, and `*.db` are never committed to your public repository.
+- [ ] **Database Constraints**: The SQLite connection leverages `PRAGMA journal_mode=WAL;` and `busy_timeout=5000` to prevent the dashboard from locking the DB while the Telegram bot writes data.
+
+### 6. Troubleshooting
+- **`uvicorn not recognized`**: Ensure you activated the virtual environment (`source venv/bin/activate`) before installing packages, or use the absolute path to `venv/bin/uvicorn`.
+- **Database Locked**: If the frontend hangs on load, the SQLite DB is busy. Ensure `WAL` mode is active, or wait 5 seconds for the retry loop.
+- **CORS Error**: Ensure the frontend domain (`https://dashboard.mydomain.com`) exactly matches `DASHBOARD_ALLOWED_ORIGINS` in your backend `.env` file.
+- **Frontend Empty/Unauthorized**: Ensure the API keys match between the Next.js `.env.local` and backend `.env`. Check the Next.js `npm run start` terminal logs.

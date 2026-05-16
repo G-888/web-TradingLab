@@ -7,7 +7,7 @@ from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
-DB_PATH = "gold_bot.db"
+DB_PATH = os.getenv("DB_PATH", "gold_bot.db")
 _lock = threading.Lock()
 
 
@@ -143,6 +143,45 @@ def init_db() -> None:
             win_rate        REAL DEFAULT 0,
             total_pnl       REAL DEFAULT 0,
             updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS strategy_benchmark_runs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            run_type TEXT,
+            symbol TEXT,
+            timeframe TEXT,
+            strategies TEXT,
+            lookback TEXT,
+            started_at TEXT,
+            completed_at TEXT,
+            status TEXT,
+            notes TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS strategy_benchmark_results (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            run_id INTEGER,
+            strategy_id TEXT,
+            strategy_name TEXT,
+            symbol TEXT,
+            timeframe TEXT,
+            market_regime TEXT,
+            session TEXT,
+            total_trades INTEGER,
+            wins INTEGER,
+            losses INTEGER,
+            win_rate REAL,
+            profit_factor REAL,
+            max_drawdown REAL,
+            net_pnl REAL,
+            expectancy REAL,
+            sharpe REAL,
+            avg_rr REAL,
+            score REAL,
+            rank INTEGER,
+            result_json TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (run_id) REFERENCES strategy_benchmark_runs(id)
         );
         """)
     _migrate_from_json()
@@ -464,3 +503,89 @@ def get_regime_statistics(strategy: str | None = None) -> list[dict]:
                 "SELECT * FROM regime_statistics ORDER BY strategy, win_rate DESC"
             ).fetchall()
         return [dict(r) for r in rows]
+
+# ── Benchmark runs ───────────────────────────────────────────────────────────
+
+def create_benchmark_run(run_type: str, symbol: str, timeframe: str, strategies: list, lookback: str = "") -> int:
+    import json
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).isoformat()
+    with _lock, _conn() as c:
+        cur = c.execute(
+            """INSERT INTO strategy_benchmark_runs
+               (run_type, symbol, timeframe, strategies, lookback, started_at, status)
+               VALUES (?,?,?,?,?,?,?)""",
+            (run_type, symbol, timeframe, json.dumps(strategies), lookback, now, "running")
+        )
+        return cur.lastrowid
+
+def update_benchmark_run_status(run_id: int, status: str, notes: str = "") -> None:
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).isoformat()
+    with _lock, _conn() as c:
+        c.execute(
+            "UPDATE strategy_benchmark_runs SET status=?, completed_at=?, notes=? WHERE id=?",
+            (status, now, notes, run_id)
+        )
+
+def save_benchmark_result(
+    run_id: int, strategy_id: str, strategy_name: str, symbol: str, timeframe: str,
+    total_trades: int, wins: int, losses: int, win_rate: float, profit_factor: float,
+    max_drawdown: float, net_pnl: float, expectancy: float, sharpe: float, avg_rr: float,
+    score: float, result_json: dict, market_regime: str = "", session: str = ""
+) -> None:
+    import json
+    with _lock, _conn() as c:
+        c.execute(
+            """INSERT INTO strategy_benchmark_results
+               (run_id, strategy_id, strategy_name, symbol, timeframe, market_regime, session,
+                total_trades, wins, losses, win_rate, profit_factor, max_drawdown, net_pnl,
+                expectancy, sharpe, avg_rr, score, result_json)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                run_id, strategy_id, strategy_name, symbol, timeframe, market_regime, session,
+                total_trades, wins, losses, win_rate, profit_factor, max_drawdown, net_pnl,
+                expectancy, sharpe, avg_rr, score, json.dumps(result_json)
+            )
+        )
+
+def get_benchmark_runs(limit: int = 50) -> list[dict]:
+    import json
+    with _lock, _conn() as c:
+        rows = c.execute("SELECT * FROM strategy_benchmark_runs ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+        runs = []
+        for r in rows:
+            d = dict(r)
+            d["strategies"] = json.loads(d["strategies"]) if d["strategies"] else []
+            runs.append(d)
+        return runs
+
+def get_benchmark_results(run_id: int) -> list[dict]:
+    import json
+    with _lock, _conn() as c:
+        rows = c.execute("SELECT * FROM strategy_benchmark_results WHERE run_id=? ORDER BY score DESC", (run_id,)).fetchall()
+        results = []
+        for r in rows:
+            d = dict(r)
+            d["result_json"] = json.loads(d["result_json"]) if d["result_json"] else {}
+            results.append(d)
+        return results
+
+def get_best_strategies_by_symbol(symbol: str, timeframe: str, limit: int = 10) -> list[dict]:
+    import json
+    with _lock, _conn() as c:
+        rows = c.execute(
+            """SELECT * FROM strategy_benchmark_results
+               WHERE symbol=? AND timeframe=?
+               GROUP BY strategy_id
+               HAVING max(score)
+               ORDER BY score DESC LIMIT ?""",
+            (symbol, timeframe, limit)
+        ).fetchall()
+        
+        results = []
+        for r in rows:
+            d = dict(r)
+            d["result_json"] = json.loads(d["result_json"]) if d["result_json"] else {}
+            results.append(d)
+        return results

@@ -77,3 +77,4 @@ data/
 web_dashboard/.env.local
 .next/
 
+.vercel

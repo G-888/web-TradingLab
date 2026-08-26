@@ -1,0 +1,9 @@
+{
+  "private": true,
+  "scripts": {
+    "build": "npm --prefix web_dashboard run build"
+  },
+  "dependencies": {
+    "next": "16.2.6"
+  }
+}

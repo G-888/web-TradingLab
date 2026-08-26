@@ -1,0 +1,20 @@
+FROM node:22-alpine
+
+WORKDIR /app
+
+COPY package*.json ./
+RUN npm ci
+
+COPY . .
+
+ARG NEXT_PUBLIC_API_BASE_URL=""
+ARG NEXT_PUBLIC_DASHBOARD_API_KEY=""
+ENV NEXT_PUBLIC_API_BASE_URL=$NEXT_PUBLIC_API_BASE_URL \
+    NEXT_PUBLIC_DASHBOARD_API_KEY=$NEXT_PUBLIC_DASHBOARD_API_KEY \
+    NODE_ENV=production
+
+RUN npm run build
+
+EXPOSE 3000
+
+CMD ["npm", "run", "start"]

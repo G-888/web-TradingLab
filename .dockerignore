@@ -1,0 +1,16 @@
+.git
+.gitignore
+.next
+node_modules
+web_dashboard/.next
+web_dashboard/node_modules
+web_dashboard/out
+logs
+data
+__pycache__
+*.py[cod]
+.env
+.env.*
+!.env.production.example
+venv
+.venv

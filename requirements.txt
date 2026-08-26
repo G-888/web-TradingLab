@@ -15,3 +15,4 @@ fastapi
 uvicorn
 python-dotenv
 pandas>=2.2.0
+psycopg[binary]>=3.2.0

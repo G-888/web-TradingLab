@@ -4,20 +4,124 @@ import logging
 import os
 import threading
 from datetime import datetime
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
+
+try:
+    import psycopg
+    from psycopg.rows import dict_row
+except ImportError:  # pragma: no cover - optional until DATABASE_URL is used
+    psycopg = None
+    dict_row = None
 
 logger = logging.getLogger(__name__)
 
 DB_PATH = os.getenv("DB_PATH", "gold_bot.db")
+DATABASE_URL = (
+    os.getenv("DATABASE_URL")
+    or os.getenv("SUPABASE_DB_URL")
+    or os.getenv("POSTGRES_URL")
+)
 _lock = threading.Lock()
 
 
-def _conn() -> sqlite3.Connection:
+def _using_postgres() -> bool:
+    return bool(DATABASE_URL)
+
+
+def _postgres_url() -> str:
+    if not DATABASE_URL:
+        raise RuntimeError("DATABASE_URL is not configured")
+    parsed = urlparse(DATABASE_URL)
+    query = dict(parse_qsl(parsed.query))
+    if "sslmode" not in query:
+        query["sslmode"] = "require"
+    return urlunparse(parsed._replace(query=urlencode(query)))
+
+
+def _sql(query: str) -> str:
+    return query.replace("?", "%s")
+
+
+_AUTO_ID_TABLES = {
+    "alerts",
+    "backtest_runs",
+    "optimization_runs",
+    "strategy_benchmark_runs",
+}
+
+
+def _insert_table(query: str) -> str | None:
+    parts = query.lstrip().split()
+    if len(parts) >= 3 and parts[0].upper() == "INSERT" and parts[1].upper() == "INTO":
+        return parts[2].split("(")[0].strip('"')
+    return None
+
+
+class _PostgresCursor:
+    def __init__(self, cursor):
+        self._cursor = cursor
+        self.lastrowid = None
+
+    def execute(self, query: str, params: tuple = ()):
+        sql = _sql(query)
+        table = _insert_table(query)
+        if table in _AUTO_ID_TABLES and "RETURNING" not in query.upper():
+            sql = f"{sql} RETURNING id"
+            self._cursor.execute(sql, params)
+            row = self._cursor.fetchone()
+            self.lastrowid = row["id"] if row else None
+        else:
+            self._cursor.execute(sql, params)
+        return self
+
+    def fetchone(self):
+        return self._cursor.fetchone()
+
+    def fetchall(self):
+        return self._cursor.fetchall()
+
+    @property
+    def rowcount(self):
+        return self._cursor.rowcount
+
+
+class _PostgresConnection:
+    def __init__(self):
+        if psycopg is None:
+            raise RuntimeError("DATABASE_URL is configured but psycopg is not installed")
+        self._conn = psycopg.connect(_postgres_url(), row_factory=dict_row)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        if exc_type:
+            self._conn.rollback()
+        else:
+            self._conn.commit()
+        self._conn.close()
+
+    def execute(self, query: str, params: tuple = ()):
+        return _PostgresCursor(self._conn.cursor()).execute(query, params)
+
+
+def _conn():
+    if _using_postgres():
+        return _PostgresConnection()
+
     c = sqlite3.connect(DB_PATH, check_same_thread=False)
     c.row_factory = sqlite3.Row
     return c
 
 
 def init_db() -> None:
+    if _using_postgres():
+        from dashboard_api.db import init_postgres_db
+        with _lock, _conn() as c:
+            init_postgres_db(c._conn)
+        logger.info("Database initialised at Supabase/Postgres")
+        return
+
     with _lock, _conn() as c:
         c.executescript("""
         CREATE TABLE IF NOT EXISTS users (
@@ -574,14 +678,27 @@ def get_benchmark_results(run_id: int) -> list[dict]:
 def get_best_strategies_by_symbol(symbol: str, timeframe: str, limit: int = 10) -> list[dict]:
     import json
     with _lock, _conn() as c:
-        rows = c.execute(
-            """SELECT * FROM strategy_benchmark_results
-               WHERE symbol=? AND timeframe=?
-               GROUP BY strategy_id
-               HAVING max(score)
-               ORDER BY score DESC LIMIT ?""",
-            (symbol, timeframe, limit)
-        ).fetchall()
+        if _using_postgres():
+            rows = c.execute(
+                """SELECT * FROM (
+                       SELECT *,
+                              ROW_NUMBER() OVER (PARTITION BY strategy_id ORDER BY score DESC) AS rn
+                       FROM strategy_benchmark_results
+                       WHERE symbol=? AND timeframe=?
+                   ) ranked
+                   WHERE rn=1
+                   ORDER BY score DESC LIMIT ?""",
+                (symbol, timeframe, limit)
+            ).fetchall()
+        else:
+            rows = c.execute(
+                """SELECT * FROM strategy_benchmark_results
+                   WHERE symbol=? AND timeframe=?
+                   GROUP BY strategy_id
+                   HAVING max(score)
+                   ORDER BY score DESC LIMIT ?""",
+                (symbol, timeframe, limit)
+            ).fetchall()
         
         results = []
         for r in rows:

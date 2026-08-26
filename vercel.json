@@ -1,0 +1,12 @@
+{
+  "framework": "nextjs",
+  "installCommand": "npm --prefix web_dashboard ci",
+  "buildCommand": "npm --prefix web_dashboard run build",
+  "outputDirectory": "web_dashboard/.next",
+  "rewrites": [
+    {
+      "source": "/health",
+      "destination": "/api/index.py"
+    }
+  ]
+}
